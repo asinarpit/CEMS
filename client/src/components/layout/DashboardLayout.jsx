@@ -9,8 +9,8 @@ const DashboardLayout = () => {
   const { user } = useSelector((state) => state.auth);
   const location = useLocation();
   
-  if (!user || (user.role !== 'admin' && user.role !== 'organizer')) {
-    return <Navigate to="/" />;
+  if (!user) {
+    return <Navigate to="/login" />;
   }
   
   if (location.pathname === '/dashboard') {

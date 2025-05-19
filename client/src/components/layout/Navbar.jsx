@@ -41,11 +41,9 @@ const Navbar = () => {
           
           {user ? (
             <>
-              {user.role !== 'student' && (
-                <Link to="/dashboard" className="text-gray-700 dark:text-gray-200 hover:text-primary dark:hover:text-primary">
-                  Dashboard
-                </Link>
-              )}
+              <Link to="/dashboard" className="text-gray-700 dark:text-gray-200 hover:text-primary dark:hover:text-primary">
+                Dashboard
+              </Link>
               
               {(user.role === 'admin' || user.role === 'organizer') && (
                 <Link to="/events/create" className="text-gray-700 dark:text-gray-200 hover:text-primary dark:hover:text-primary flex items-center">
@@ -108,15 +106,13 @@ const Navbar = () => {
           
           {user ? (
             <>
-              {user.role !== 'student' && (
-                <Link 
-                  to="/dashboard" 
-                  className="block py-2 text-gray-700 dark:text-gray-200 hover:text-primary dark:hover:text-primary"
-                  onClick={toggleMenu}
-                >
-                  Dashboard
-                </Link>
-              )}
+              <Link 
+                to="/dashboard" 
+                className="block py-2 text-gray-700 dark:text-gray-200 hover:text-primary dark:hover:text-primary"
+                onClick={toggleMenu}
+              >
+                Dashboard
+              </Link>
               
               {(user.role === 'admin' || user.role === 'organizer') && (
                 <Link 

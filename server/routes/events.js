@@ -4,6 +4,7 @@ const { check, validationResult } = require('express-validator');
 const Event = require('../models/Event');
 const User = require('../models/User');
 const { protect, authorize } = require('../middleware/auth');
+const { sendEventTicket } = require('../utils/ticketService');
 
 // @route   GET /api/events
 // @desc    Get all events
@@ -224,7 +225,7 @@ router.delete('/:id', protect, authorize('admin', 'organizer'), async (req, res)
 // @access  Private
 router.post('/register/:id', protect, async (req, res) => {
   try {
-    const event = await Event.findById(req.params.id);
+    const event = await Event.findById(req.params.id).populate('organizer', 'name email');
     const user = await User.findById(req.user.id);
 
     if (!event) {
@@ -270,6 +271,14 @@ router.post('/register/:id', protect, async (req, res) => {
     // Add event to user's registered events
     user.registeredEvents.push(event._id);
     await user.save();
+
+    // Send ticket via email
+    try {
+      await sendEventTicket(event, user);
+    } catch (emailErr) {
+      console.error('Error sending ticket:', emailErr);
+      // Don't fail the registration if email fails
+    }
 
     res.json({
       success: true,
@@ -329,6 +338,196 @@ router.post('/unregister/:id', protect, async (req, res) => {
       return res.status(404).json({ message: 'Event not found' });
     }
     res.status(500).json({ message: 'Server Error' });
+  }
+});
+
+// @route   POST /api/events/complete-payment/:id
+// @desc    Complete payment and registration for a paid event
+// @access  Private
+router.post('/complete-payment/:id', protect, async (req, res) => {
+  try {
+    const { transactionId } = req.body;
+    
+    const event = await Event.findById(req.params.id).populate('organizer', 'name email');
+    const user = await User.findById(req.user.id);
+
+    if (!event) {
+      return res.status(404).json({ message: 'Event not found' });
+    }
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    // Check if event is active
+    if (!event.isActive) {
+      return res.status(400).json({ message: 'This event is no longer active' });
+    }
+
+    // Check if already registered
+    if (event.registeredUsers.some(userId => userId.toString() === req.user.id)) {
+      return res.status(400).json({ message: 'Already registered for this event' });
+    }
+
+    // Check if event capacity is reached
+    if (event.registeredUsers.length >= event.capacity) {
+      return res.status(400).json({ message: 'Event capacity reached' });
+    }
+
+    // Add user to event registrations
+    event.registeredUsers.push(req.user.id);
+    await event.save();
+
+    // Add event to user's registered events
+    user.registeredEvents.push(event._id);
+    await user.save();
+
+    // Payment details
+    const paymentDetails = {
+      transactionId,
+      amount: event.price,
+      date: new Date(),
+      status: 'completed'
+    };
+
+    // Send ticket via email
+    try {
+      await sendEventTicket(event, user, true, paymentDetails);
+    } catch (emailErr) {
+      console.error('Error sending ticket:', emailErr);
+      // Don't fail the registration if email fails
+    }
+
+    res.json({
+      success: true,
+      message: 'Payment successful and registration completed',
+      data: {
+        event,
+        payment: paymentDetails
+      }
+    });
+  } catch (err) {
+    console.error(err.message);
+    if (err.kind === 'ObjectId') {
+      return res.status(404).json({ message: 'Event not found' });
+    }
+    res.status(500).json({ message: 'Server Error' });
+  }
+});
+
+/**
+ * @route   GET /api/events/:id/participants
+ * @desc    Get all participants for an event
+ * @access  Private (Admin or Organizer of the event)
+ */
+router.get('/:id/participants', protect, async (req, res) => {
+  try {
+    const event = await Event.findById(req.params.id)
+      .populate({
+        path: 'participants.user',
+        select: 'name email'
+      });
+
+    if (!event) {
+      return res.status(404).json({
+        success: false,
+        message: 'Event not found'
+      });
+    }
+
+    // Check if user is admin or the organizer of the event
+    if (req.user.role !== 'admin' && event.organizer.toString() !== req.user.id.toString()) {
+      return res.status(403).json({
+        success: false,
+        message: 'Not authorized to access this resource'
+      });
+    }
+
+    // Return participants with user details
+    res.json({
+      success: true,
+      data: {
+        event: {
+          _id: event._id,
+          title: event.title,
+          date: event.startDate,
+          isPaid: event.isPaid,
+          price: event.price
+        },
+        participants: event.participants
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching participants:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+});
+
+/**
+ * @route   PUT /api/events/:id/participants/:participantId/attendance
+ * @desc    Toggle attendance status for a participant
+ * @access  Private (Admin or Organizer of the event)
+ */
+router.put('/:id/participants/:participantId/attendance', protect, async (req, res) => {
+  try {
+    const { attended } = req.body;
+    
+    // Validate attendance data
+    if (attended === undefined) {
+      return res.status(400).json({
+        success: false,
+        message: 'Attendance status is required'
+      });
+    }
+
+    const event = await Event.findById(req.params.id);
+
+    if (!event) {
+      return res.status(404).json({
+        success: false,
+        message: 'Event not found'
+      });
+    }
+
+    // Check if user is admin or the organizer of the event
+    if (req.user.role !== 'admin' && event.organizer.toString() !== req.user.id.toString()) {
+      return res.status(403).json({
+        success: false,
+        message: 'Not authorized to update attendance'
+      });
+    }
+
+    // Find the participant
+    const participantIndex = event.participants.findIndex(
+      p => p._id.toString() === req.params.participantId
+    );
+
+    if (participantIndex === -1) {
+      return res.status(404).json({
+        success: false,
+        message: 'Participant not found'
+      });
+    }
+
+    // Update attendance status
+    event.participants[participantIndex].attended = attended;
+
+    await event.save();
+
+    res.json({
+      success: true,
+      message: `Attendance status ${attended ? 'marked' : 'unmarked'} successfully`,
+      data: event.participants[participantIndex]
+    });
+  } catch (error) {
+    console.error('Error updating attendance:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
   }
 });
 

@@ -9,38 +9,38 @@ import Spinner from '../components/ui/Spinner';
 const Home = () => {
   const dispatch = useDispatch();
   const { events, isLoading, isError, message } = useSelector((state) => state.events);
-  
+
   const [searchTerm, setSearchTerm] = useState('');
   const [filterCategory, setFilterCategory] = useState('');
   const [filteredEvents, setFilteredEvents] = useState([]);
-  
+
   useEffect(() => {
     if (isError) {
       toast.error(message);
     }
-    
+
     dispatch(getEvents());
-    
+
     return () => {
       dispatch(reset());
     };
   }, [dispatch, isError, message]);
-  
+
   useEffect(() => {
     if (events) {
       setFilteredEvents(
         events.filter((event) => {
           const matchesSearch = event.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                               event.description.toLowerCase().includes(searchTerm.toLowerCase());
-          
+            event.description.toLowerCase().includes(searchTerm.toLowerCase());
+
           const matchesCategory = filterCategory ? event.category === filterCategory : true;
-          
+
           return matchesSearch && matchesCategory;
         })
       );
     }
   }, [events, searchTerm, filterCategory]);
-  
+
   const categoryOptions = [
     { value: '', label: 'All Categories' },
     { value: 'academic', label: 'Academic' },
@@ -50,7 +50,7 @@ const Home = () => {
     { value: 'workshop', label: 'Workshop' },
     { value: 'other', label: 'Other' }
   ];
-  
+
   if (isLoading) {
     return <Spinner />;
   }
@@ -65,8 +65,8 @@ const Home = () => {
           <p className="text-lg md:text-xl mb-5 md:mb-8 max-w-2xl mx-auto px-4">
             Discover, register, and manage all your college events in one place.
           </p>
-          
-          <div className="max-w-2xl mx-auto flex flex-col gap-3 px-4">
+
+          <div className="max-w-2xl mx-auto flex gap-3 px-4">
             <div className="relative flex-1">
               <input
                 type="text"
@@ -77,7 +77,7 @@ const Home = () => {
               />
               <FaSearch className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
             </div>
-            
+
             <div className="relative">
               <select
                 value={filterCategory}
@@ -95,12 +95,12 @@ const Home = () => {
           </div>
         </div>
       </section>
-      
+
       <section className="pb-10">
         <h2 className="text-xl md:text-2xl font-bold mb-4 md:mb-6 text-gray-800 dark:text-white">
           Upcoming Events
         </h2>
-        
+
         {filteredEvents.length === 0 ? (
           <div className="text-center py-6 md:py-10">
             <p className="text-gray-600 dark:text-gray-300 text-base md:text-lg">

@@ -8,7 +8,11 @@ import {
   FaChevronLeft,
   FaChevronRight,
   FaSignOutAlt,
-  FaTimes
+  FaTimes,
+  FaTicketAlt,
+  FaMoneyBillWave,
+  FaClipboardList,
+  FaTachometerAlt
 } from 'react-icons/fa';
 import { logout, reset } from '../../features/auth/authSlice';
 
@@ -37,6 +41,8 @@ const DashboardSidebar = ({ closeMobileMenu }) => {
   }, []);
   
   const isAdmin = user && user.role === 'admin';
+  const isOrganizer = user && user.role === 'organizer';
+  const isStudent = user && user.role === 'student';
   
   const toggleSidebar = () => {
     setCollapsed(!collapsed);
@@ -53,6 +59,12 @@ const DashboardSidebar = ({ closeMobileMenu }) => {
       path: '/dashboard/profile',
       name: 'My Profile',
       icon: <FaUserCircle />,
+      access: ['admin', 'organizer', 'student']
+    },
+    {
+      path: '/dashboard/overview',
+      name: 'Dashboard',
+      icon: <FaTachometerAlt />,
       access: ['admin', 'organizer']
     },
     {
@@ -66,6 +78,24 @@ const DashboardSidebar = ({ closeMobileMenu }) => {
       name: 'User Management',
       icon: <FaUsers />,
       access: ['admin']
+    },
+    {
+      path: '/dashboard/transactions',
+      name: 'Transactions',
+      icon: <FaMoneyBillWave />,
+      access: ['admin', 'organizer']
+    },
+    {
+      path: '/dashboard/participants',
+      name: 'Participants',
+      icon: <FaClipboardList />,
+      access: ['admin', 'organizer']
+    },
+    {
+      path: '/dashboard/my-events',
+      name: 'My Events',
+      icon: <FaTicketAlt />,
+      access: ['student']
     }
   ];
   

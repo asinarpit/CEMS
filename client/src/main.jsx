@@ -12,9 +12,8 @@ createRoot(document.getElementById('root')).render(
   <Provider store={store}>
     <BrowserRouter>
       <StrictMode>
-        {/* <App /> */}
-        {/* <ToastContainer position="top-center" theme="colored" /> */}
-        <div className='text-5xl text-red-500 flex justify-center items-center h-screen animate-ping'>Gand mrao bhosdiwalo</div>
+        <App />
+        <ToastContainer position="top-center" theme="colored" />
       </StrictMode>
     </BrowserRouter>
   </Provider>

@@ -6,7 +6,7 @@ import { FaCreditCard, FaPhoneAlt, FaCheckCircle, FaTimesCircle } from 'react-ic
 import axios from 'axios';
 import Spinner from '../components/ui/Spinner';
 
-const API_URL = `${import.meta.env.VITE_API_URL || 'http://localhost:5000/api'}/payments`;
+const API_URL = `${import.meta.env.VITE_API_URL || 'http://localhost:5000/api'}`;
 
 const Payment = () => {
   const { paymentId } = useParams();
@@ -49,8 +49,9 @@ const Payment = () => {
         }
       };
       
-      const response = await axios.post(
-        `${API_URL}/process/${paymentId}`,
+      // First, process the payment
+      const paymentResponse = await axios.post(
+        `${API_URL}/payments/process/${paymentId}`,
         {
           eventId,
           status
@@ -58,14 +59,26 @@ const Payment = () => {
         config
       );
       
-      setPaymentStatus(status);
-      setIsComplete(true);
-      
+      // If payment is successful, complete the registration and send ticket
       if (status === 'success') {
-        toast.success('Payment successful');
+        const transactionId = `PHONEPAY-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+        
+        await axios.post(
+          `${API_URL}/events/complete-payment/${eventId}`,
+          {
+            transactionId
+          },
+          config
+        );
+        
+        toast.success('Payment successful. A ticket has been sent to your email.');
       } else {
         toast.error('Payment failed');
       }
+      
+      setPaymentStatus(status);
+      setIsComplete(true);
+      
     } catch (error) {
       const message = 
         (error.response && 
@@ -103,6 +116,7 @@ const Payment = () => {
                 </h2>
                 <p className="text-gray-600 dark:text-gray-400 mb-6">
                   Your payment has been processed successfully. You are now registered for the event.
+                  A confirmation email with your ticket has been sent to your registered email address.
                 </p>
                 <button
                   onClick={() => navigate('/dashboard/events')}

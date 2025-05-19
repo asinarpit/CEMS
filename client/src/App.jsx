@@ -18,6 +18,10 @@ import DashboardLayout from './components/layout/DashboardLayout';
 import UserManagement from './pages/Dashboard/UserManagement';
 import EventManagement from './pages/Dashboard/EventManagement';
 import ProfilePage from './pages/Dashboard/ProfilePage';
+import StudentEvents from './pages/Dashboard/StudentEvents';
+import DashboardOverview from './pages/Dashboard/DashboardOverview';
+import TransactionsPage from './pages/Dashboard/TransactionsPage';
+import ParticipantsPage from './pages/Dashboard/ParticipantsPage';
 
 function App() {
   const { theme } = useSelector((state) => state.theme);
@@ -36,8 +40,13 @@ function App() {
         <Route path="/dashboard" element={<DashboardLayout />}>
           <Route index element={<Navigate to="/dashboard/profile" replace />} />
           <Route path="profile" element={<ProfilePage />} />
+          <Route path="overview" element={<DashboardOverview />} />
           <Route path="events" element={<EventManagement />} />
           <Route path="users" element={<UserManagement />} />
+          <Route path="transactions" element={<TransactionsPage />} />
+          <Route path="participants" element={<ParticipantsPage />} />
+          <Route path="participants/:eventId" element={<ParticipantsPage />} />
+          <Route path="my-events" element={<StudentEvents />} />
         </Route>
         
         <Route path="/" element={
