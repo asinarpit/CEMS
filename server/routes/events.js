@@ -5,6 +5,9 @@ const Event = require('../models/Event');
 const User = require('../models/User');
 const { protect, authorize } = require('../middleware/auth');
 const { sendEventTicket } = require('../utils/ticketService');
+const Payment = require('../models/Payment');
+const fs = require('fs');
+const { getEventTicket } = require('../utils/ticketService');
 
 // @route   GET /api/events
 // @desc    Get all events
@@ -229,26 +232,41 @@ router.post('/register/:id', protect, async (req, res) => {
     const user = await User.findById(req.user.id);
 
     if (!event) {
-      return res.status(404).json({ message: 'Event not found' });
+      return res.status(404).json({ 
+        success: false,
+        message: 'Event not found' 
+      });
     }
 
     if (!user) {
-      return res.status(404).json({ message: 'User not found' });
+      return res.status(404).json({ 
+        success: false, 
+        message: 'User not found' 
+      });
     }
 
     // Check if event is active
     if (!event.isActive) {
-      return res.status(400).json({ message: 'This event is no longer active' });
+      return res.status(400).json({ 
+        success: false,
+        message: 'This event is no longer active' 
+      });
     }
 
     // Check if already registered
     if (event.registeredUsers.some(userId => userId.toString() === req.user.id)) {
-      return res.status(400).json({ message: 'Already registered for this event' });
+      return res.status(400).json({ 
+        success: false,
+        message: 'Already registered for this event' 
+      });
     }
 
     // Check if event capacity is reached
-    if (event.registeredUsers.length >= event.capacity) {
-      return res.status(400).json({ message: 'Event capacity reached' });
+    if (event.capacity && event.registeredUsers.length >= event.capacity) {
+      return res.status(400).json({ 
+        success: false,
+        message: 'Event capacity reached' 
+      });
     }
 
     // If paid event, redirect to payment route (handled in frontend)
@@ -272,9 +290,29 @@ router.post('/register/:id', protect, async (req, res) => {
     user.registeredEvents.push(event._id);
     await user.save();
 
+    // Generate a ticket ID for free events
+    const ticketId = `TIX-FREE-${Math.random().toString(36).substring(2, 10).toUpperCase()}`;
+    
+    // Create a payment record for free events to keep track of ticket
+    const payment = new Payment({
+      user: req.user.id,
+      event: event._id,
+      amount: 0,
+      paymentId: `FREE-${Math.random().toString(36).substring(2, 10).toUpperCase()}`,
+      ticketId,
+      status: 'success',
+      paymentMethod: 'free',
+      paymentDetails: { type: 'free event' }
+    });
+    
+    await payment.save();
+
     // Send ticket via email
+    let ticketSent = false;
     try {
-      await sendEventTicket(event, user);
+      await sendEventTicket(user.email, event, user, ticketId);
+      ticketSent = true;
+      console.log(`Ticket sent successfully to ${user.email} for event ${event.title}`);
     } catch (emailErr) {
       console.error('Error sending ticket:', emailErr);
       // Don't fail the registration if email fails
@@ -283,15 +321,21 @@ router.post('/register/:id', protect, async (req, res) => {
     res.json({
       success: true,
       isPaid: false,
-      message: 'Successfully registered for event',
-      data: event
+      ticketSent,
+      message: ticketSent 
+        ? 'Successfully registered for event. Ticket has been sent to your email.' 
+        : 'Successfully registered for event. Ticket generation failed, please contact support.',
+      data: {
+        event,
+        ticketId
+      }
     });
   } catch (err) {
-    console.error(err.message);
-    if (err.kind === 'ObjectId') {
-      return res.status(404).json({ message: 'Event not found' });
-    }
-    res.status(500).json({ message: 'Server Error' });
+    console.error('Registration error:', err.message);
+    res.status(500).json({ 
+      success: false,
+      message: 'Server Error' 
+    });
   }
 });
 
@@ -422,10 +466,11 @@ router.post('/complete-payment/:id', protect, async (req, res) => {
  */
 router.get('/:id/participants', protect, async (req, res) => {
   try {
+    // Use the correct approach to get participants - already defined in another route
     const event = await Event.findById(req.params.id)
       .populate({
-        path: 'participants.user',
-        select: 'name email'
+        path: 'registeredUsers',
+        select: 'name email department year role'
       });
 
     if (!event) {
@@ -443,7 +488,26 @@ router.get('/:id/participants', protect, async (req, res) => {
       });
     }
 
-    // Return participants with user details
+    // Get payment records for this event
+    const payments = await Payment.find({ event: req.params.id });
+    
+    // Format participants with additional info
+    const participants = event.registeredUsers.map(user => {
+      const payment = payments.find(p => p.user.toString() === user._id.toString());
+      
+      return {
+        _id: user._id,
+        name: user.name,
+        email: user.email,
+        department: user.department || null,
+        year: user.year || null,
+        role: user.role,
+        registrationDate: payment ? payment.createdAt : null,
+        ticketId: payment ? payment.ticketId : null,
+        paid: payment ? payment.status === 'success' : false
+      };
+    });
+
     res.json({
       success: true,
       data: {
@@ -454,7 +518,7 @@ router.get('/:id/participants', protect, async (req, res) => {
           isPaid: event.isPaid,
           price: event.price
         },
-        participants: event.participants
+        participants
       }
     });
   } catch (error) {
@@ -527,6 +591,150 @@ router.put('/:id/participants/:participantId/attendance', protect, async (req, r
     res.status(500).json({
       success: false,
       message: 'Server error'
+    });
+  }
+});
+
+// @route   GET /api/events/transactions
+// @desc    Get all transactions (admin only)
+// @access  Private/Admin
+router.get('/transactions', protect, authorize('admin'), async (req, res) => {
+  try {
+    const transactions = await Payment.find()
+      .populate({
+        path: 'event',
+        select: 'title startDate endDate'
+      })
+      .populate({
+        path: 'user',
+        select: 'name email'
+      })
+      .sort({ createdAt: -1 });
+    
+    res.json({
+      success: true,
+      count: transactions.length,
+      data: transactions
+    });
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Server Error' 
+    });
+  }
+});
+
+// @route   GET /api/events/transactions/organizer
+// @desc    Get transactions for events organized by the user
+// @access  Private/Organizer
+router.get('/transactions/organizer', protect, authorize('organizer'), async (req, res) => {
+  try {
+    // First get all events organized by this user
+    const events = await Event.find({ organizer: req.user.id }).select('_id');
+    const eventIds = events.map(event => event._id);
+    
+    // Then get all transactions for these events
+    const transactions = await Payment.find({ event: { $in: eventIds } })
+      .populate({
+        path: 'event',
+        select: 'title startDate endDate'
+      })
+      .populate({
+        path: 'user',
+        select: 'name email'
+      })
+      .sort({ createdAt: -1 });
+    
+    res.json({
+      success: true,
+      count: transactions.length,
+      data: transactions
+    });
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Server Error' 
+    });
+  }
+});
+
+// @route   GET /api/events/organizer
+// @desc    Get events created by logged in organizer
+// @access  Private/Organizer
+router.get('/organizer', protect, authorize('organizer'), async (req, res) => {
+  try {
+    const events = await Event.find({ organizer: req.user.id })
+      .populate('organizer', 'name email')
+      .sort({ createdAt: -1 });
+    
+    res.json({
+      success: true,
+      count: events.length,
+      data: events
+    });
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Server Error' 
+    });
+  }
+});
+
+// @route   GET /api/events/:id/ticket
+// @desc    Get ticket for an event
+// @access  Private
+router.get('/:id/ticket', protect, async (req, res) => {
+  try {
+    const event = await Event.findById(req.params.id).populate('organizer', 'name email');
+    
+    if (!event) {
+      return res.status(404).json({ 
+        success: false,
+        message: 'Event not found' 
+      });
+    }
+    
+    // Check if user is registered for this event
+    const user = await User.findById(req.user.id);
+    if (!user.registeredEvents.includes(req.params.id)) {
+      return res.status(403).json({
+        success: false,
+        message: 'You are not registered for this event'
+      });
+    }
+    
+    // Get payment record to get ticket ID
+    const payment = await Payment.findOne({ 
+      user: req.user.id, 
+      event: req.params.id,
+      status: 'success'
+    });
+    
+    // Generate ticket
+    const ticketId = payment ? payment.ticketId : `TIX-${Math.random().toString(36).substring(2, 10).toUpperCase()}`;
+    const ticketPath = await getEventTicket(event, user, ticketId);
+    
+    // Send the file
+    res.download(ticketPath, `${event.title.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_ticket.pdf`, (err) => {
+      // Delete the file after sending
+      if (err) {
+        console.error('Error sending ticket:', err);
+      } else {
+        try {
+          fs.unlinkSync(ticketPath);
+        } catch (unlinkErr) {
+          console.error('Error deleting ticket file:', unlinkErr);
+        }
+      }
+    });
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Server Error' 
     });
   }
 });

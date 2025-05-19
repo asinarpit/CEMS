@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useSelector } from 'react-redux';
 import { Link, useParams, useNavigate } from 'react-router-dom';
-import { FaSearch, FaFilter, FaDownload, FaEnvelope, FaUsers, FaArrowLeft, FaTicketAlt, FaCheck, FaTimes } from 'react-icons/fa';
+import { FaSearch, FaFilter, FaDownload, FaEnvelope, FaUsers, FaArrowLeft, FaTicketAlt, FaCheck, FaTimes, FaFileCsv, FaCalendarAlt, FaUser, FaListAlt } from 'react-icons/fa';
 import axios from 'axios';
 import { toast } from 'react-toastify';
 import Spinner from '../../components/ui/Spinner';
@@ -11,16 +11,17 @@ const API_URL = `${import.meta.env.VITE_API_URL || 'http://localhost:5000/api'}`
 const ParticipantsPage = () => {
   const { eventId } = useParams();
   const navigate = useNavigate();
+  const [events, setEvents] = useState([]);
+  const [selectedEvent, setSelectedEvent] = useState(eventId || '');
   const [participants, setParticipants] = useState([]);
   const [filteredParticipants, setFilteredParticipants] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
-  const [statusFilter, setStatusFilter] = useState('all');
-  const [paymentFilter, setPaymentFilter] = useState('all');
+  const [sortField, setSortField] = useState('name');
+  const [sortOrder, setSortOrder] = useState('asc');
   const [pageSize, setPageSize] = useState(10);
   const [currentPage, setCurrentPage] = useState(1);
   const [event, setEvent] = useState(null);
-  const [events, setEvents] = useState([]);
   const [error, setError] = useState(null);
   
   const { user } = useSelector((state) => state.auth);
@@ -32,51 +33,65 @@ const ParticipantsPage = () => {
         setIsLoading(true);
         const token = localStorage.getItem('token');
         
+        if (!token) {
+          toast.error('Authentication required');
+          return;
+        }
+        
         const config = {
           headers: {
             Authorization: `Bearer ${token}`
           }
         };
         
-        // Debug message
-        console.log('Fetching events...');
+        // For organizers, only fetch their events
+        // For admins, fetch all events
+        const endpoint = user.role === 'organizer' 
+          ? `${API_URL}/events/organizer` 
+          : `${API_URL}/events`;
         
-        const url = isAdmin 
-          ? `${API_URL}/events` 
-          : `${API_URL}/events`; // Use a common endpoint for now
-        
-        const response = await axios.get(url, config);
-        console.log('Events response:', response.data);
+        const response = await axios.get(endpoint, config);
         
         if (response.data.success) {
-          // Filter events organized by this user if not admin
-          let filteredEvents = response.data.data;
-          if (!isAdmin && user.role === 'organizer') {
-            filteredEvents = filteredEvents.filter(e => e.organizer._id === user.id);
+          setEvents(response.data.data);
+          
+          // Set selected event if eventId param exists and is valid
+          if (eventId) {
+            const eventExists = response.data.data.some(event => event._id === eventId);
+            if (eventExists) {
+              setSelectedEvent(eventId);
+            } else if (response.data.data.length > 0) {
+              setSelectedEvent(response.data.data[0]._id);
+            }
+          } else if (response.data.data.length > 0) {
+            setSelectedEvent(response.data.data[0]._id);
           }
-          setEvents(filteredEvents);
+        } else {
+          throw new Error('Failed to fetch events');
         }
       } catch (error) {
         console.error('Error fetching events:', error);
-        setError(error.message || 'Error fetching events');
-        toast.error('Error fetching events');
+        toast.error(error.response?.data?.message || 'Error fetching events');
       } finally {
         setIsLoading(false);
       }
     };
     
-    if (!eventId) {
-      fetchEvents();
-    }
-  }, [isAdmin, eventId, user]);
+    fetchEvents();
+  }, [user, eventId]);
   
   useEffect(() => {
     const fetchParticipants = async () => {
-      if (!eventId) return;
+      if (!selectedEvent) return;
       
       try {
         setIsLoading(true);
         const token = localStorage.getItem('token');
+        
+        if (!token) {
+          toast.error('Authentication required');
+          return;
+        }
         
         const config = {
           headers: {
@@ -84,149 +99,140 @@ const ParticipantsPage = () => {
           }
         };
         
-        // Debug message
-        console.log(`Fetching participants for event ${eventId}...`);
+        const response = await axios.get(`${API_URL}/events/${selectedEvent}/participants`, config);
         
-        // First, get the event details
-        const eventResponse = await axios.get(`${API_URL}/events/${eventId}`, config);
-        console.log('Event response:', eventResponse.data);
-        
-        if (eventResponse.data.success) {
-          const eventData = eventResponse.data.data;
-          setEvent(eventData);
-          
-          // Create formatted participants from registeredUsers
-          if (eventData.registeredUsers && Array.isArray(eventData.registeredUsers)) {
-            const formattedParticipants = eventData.registeredUsers.map(user => ({
-              _id: user._id,
-              user: user,
-              attended: false, // Default value since we don't track attendance yet
-              paid: eventData.isPaid, // Assume all registered users for paid events have paid
-              registeredAt: user.createdAt || new Date()
-            }));
-            
-            setParticipants(formattedParticipants);
-            setFilteredParticipants(formattedParticipants);
-            console.log('Formatted participants:', formattedParticipants);
-          } else {
-            console.log('No registeredUsers found in the event data');
-            setParticipants([]);
-            setFilteredParticipants([]);
-          }
+        if (response.data.success) {
+          setParticipants(response.data.data);
+          setFilteredParticipants(response.data.data);
+        } else {
+          throw new Error('Failed to fetch participants');
         }
       } catch (error) {
         console.error('Error fetching participants:', error);
-        setError(error.message || 'Error fetching participants');
-        toast.error('Error fetching participants');
+        toast.error(error.response?.data?.message || 'Error fetching participants');
+        setParticipants([]);
+        setFilteredParticipants([]);
       } finally {
         setIsLoading(false);
       }
     };
     
     fetchParticipants();
-  }, [eventId]);
+  }, [selectedEvent]);
   
-  // Apply filters
   useEffect(() => {
-    if (!participants) return;
-    
-    let results = participants;
-    
-    // Search term filter
-    if (searchTerm) {
-      results = results.filter(participant => 
-        participant.user.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        participant.user.email.toLowerCase().includes(searchTerm.toLowerCase())
-      );
+    if (!searchTerm.trim()) {
+      setFilteredParticipants(participants);
+      return;
     }
     
-    // Status filter (attendance)
-    if (statusFilter !== 'all') {
-      const attended = statusFilter === 'attended';
-      results = results.filter(participant => participant.attended === attended);
-    }
-    
-    // Payment filter
-    if (paymentFilter !== 'all') {
-      const paid = paymentFilter === 'paid';
-      results = results.filter(participant => participant.paid === paid);
-    }
+    const searchLower = searchTerm.toLowerCase();
+    const results = participants.filter(
+      participant =>
+        participant.name.toLowerCase().includes(searchLower) ||
+        participant.email.toLowerCase().includes(searchLower) ||
+        (participant.department && participant.department.toLowerCase().includes(searchLower)) ||
+        (participant.year && participant.year.toString().includes(searchLower)) ||
+        (participant.ticketId && participant.ticketId.toLowerCase().includes(searchLower))
+    );
     
     setFilteredParticipants(results);
-    setCurrentPage(1); // Reset to first page on filter change
-  }, [searchTerm, statusFilter, paymentFilter, participants]);
+  }, [searchTerm, participants]);
   
-  // Pagination
-  const totalPages = Math.ceil((filteredParticipants?.length || 0) / pageSize);
-  const paginatedParticipants = filteredParticipants?.slice(
-    (currentPage - 1) * pageSize,
-    currentPage * pageSize
-  ) || [];
+  useEffect(() => {
+    const sorted = [...filteredParticipants].sort((a, b) => {
+      if (sortField === 'name') {
+        return sortOrder === 'asc'
+          ? a.name.localeCompare(b.name)
+          : b.name.localeCompare(a.name);
+      } else if (sortField === 'email') {
+        return sortOrder === 'asc'
+          ? a.email.localeCompare(b.email)
+          : b.email.localeCompare(a.email);
+      } else if (sortField === 'department') {
+        const deptA = a.department || '';
+        const deptB = b.department || '';
+        return sortOrder === 'asc'
+          ? deptA.localeCompare(deptB)
+          : deptB.localeCompare(deptA);
+      } else if (sortField === 'year') {
+        const yearA = a.year || 0;
+        const yearB = b.year || 0;
+        return sortOrder === 'asc'
+          ? yearA - yearB
+          : yearB - yearA;
+      } else if (sortField === 'registrationDate') {
+        const dateA = new Date(a.registrationDate || 0);
+        const dateB = new Date(b.registrationDate || 0);
+        return sortOrder === 'asc'
+          ? dateA - dateB
+          : dateB - dateA;
+      }
+      return 0;
+    });
+    
+    setFilteredParticipants(sorted);
+  }, [sortField, sortOrder]);
   
-  // Export to CSV
+  const handleSort = (field) => {
+    if (sortField === field) {
+      setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortField(field);
+      setSortOrder('asc');
+    }
+  };
+  
+  const formatDate = (dateString) => {
+    if (!dateString) return 'N/A';
+    
+    const options = { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' };
+    return new Date(dateString).toLocaleDateString(undefined, options);
+  };
+  
   const exportToCSV = () => {
-    if (!filteredParticipants || !filteredParticipants.length) return;
+    if (filteredParticipants.length === 0) {
+      toast.error('No participants to export');
+      return;
+    }
     
-    const headers = ['Name', 'Email', 'Registered On', 'Ticket Type', 'Payment Status', 'Attendance'];
-    
-    const csvData = filteredParticipants.map(p => [
-      p.user.name,
-      p.user.email,
-      new Date(p.registeredAt).toISOString(),
-      p.paid ? 'Paid' : 'Free',
-      p.paid ? 'Paid' : 'N/A',
-      p.attended ? 'Attended' : 'Not Attended'
-    ]);
-    
-    const csvContent = [
-      headers.join(','),
-      ...csvData.map(row => row.join(','))
-    ].join('\n');
-    
-    const blob = new Blob([csvContent], { type: 'text/csv' });
-    const url = window.URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.setAttribute('download', `participants-${event?.title.replace(/\s+/g, '-').toLowerCase() || 'event'}-${new Date().toISOString().slice(0, 10)}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    
-    toast.success('Participants data exported successfully');
-  };
-  
-  // Mark attendance
-  const toggleAttendance = async (participantId, currentStatus) => {
     try {
-      const token = localStorage.getItem('token');
+      const event = events.find(e => e._id === selectedEvent);
+      const eventName = event ? event.title.replace(/[^a-z0-9]/gi, '_').toLowerCase() : 'participants';
       
-      const config = {
-        headers: {
-          Authorization: `Bearer ${token}`
-        }
-      };
+      const headers = ['Name', 'Email', 'Department', 'Year', 'Registration Date', 'Ticket ID', 'Paid'];
       
-      // Just update local state for now, since attendance is not tracked on the server
-      const updatedParticipants = participants.map(p => 
-        p._id === participantId ? { ...p, attended: !currentStatus } : p
-      );
+      const csvContent = [
+        headers.join(','),
+        ...filteredParticipants.map(p => [
+          `"${p.name || ''}"`,
+          `"${p.email || ''}"`,
+          `"${p.department || ''}"`,
+          p.year || '',
+          p.registrationDate ? new Date(p.registrationDate).toISOString() : '',
+          `"${p.ticketId || ''}"`,
+          p.paid ? 'Yes' : 'No'
+        ].join(','))
+      ].join('\n');
       
-      setParticipants(updatedParticipants);
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.setAttribute('href', url);
+      link.setAttribute('download', `${eventName}_participants_${new Date().toISOString().slice(0, 10)}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
       
-      toast.success(`Attendance ${!currentStatus ? 'marked' : 'unmarked'} successfully`);
+      toast.success('Participants exported successfully');
     } catch (error) {
-      console.error('Error updating attendance:', error);
-      toast.error('Error updating attendance');
+      console.error('Error exporting participants:', error);
+      toast.error('Failed to export participants');
     }
   };
   
-  // Send email to participants
   const sendEmailToAll = () => {
-    // Redirect to email page with participant IDs
-    if (filteredParticipants && filteredParticipants.length) {
-      const participantIds = filteredParticipants.map(p => p._id).join(',');
-      navigate(`/dashboard/email/${eventId}?participants=${participantIds}`);
-    }
+    toast.info('Email functionality to be implemented');
   };
   
   if (error) {
@@ -238,330 +244,229 @@ const ParticipantsPage = () => {
     );
   }
   
-  if (isLoading && eventId) {
+  if (isLoading && events.length === 0) {
     return <Spinner />;
   }
   
-  // If no event is selected, show events list
-  if (!eventId) {
-    return (
-      <div>
-        <div className="flex flex-col md:flex-row md:items-center md:justify-between mb-6">
-          <h1 className="text-2xl font-bold text-gray-800 dark:text-white mb-4 md:mb-0">Events Participants</h1>
+  return (
+    <div className="container mx-auto py-6">
+      <div className="flex justify-between items-center mb-6">
+        <h1 className="text-2xl font-bold text-gray-800 dark:text-white">Event Participants</h1>
+        
+        <div className="flex space-x-2">
+          <button
+            onClick={exportToCSV}
+            className="btn btn-secondary flex items-center"
+            disabled={filteredParticipants.length === 0}
+          >
+            <FaFileCsv className="mr-2" /> Export CSV
+          </button>
+          
+          <button
+            onClick={sendEmailToAll}
+            className="btn btn-primary flex items-center"
+            disabled={filteredParticipants.length === 0}
+          >
+            <FaEnvelope className="mr-2" /> Email All
+          </button>
+        </div>
+      </div>
+      
+      <div className="bg-white dark:bg-dark-200 rounded-lg shadow p-4 mb-6">
+        <div className="mb-4">
+          <label className="block text-gray-700 dark:text-gray-300 mb-2">
+            Select Event
+          </label>
+          <select
+            value={selectedEvent}
+            onChange={(e) => setSelectedEvent(e.target.value)}
+            className="w-full p-2 border border-gray-300 dark:border-gray-700 rounded-lg bg-white dark:bg-dark-300 text-gray-900 dark:text-white"
+          >
+            {events.length === 0 ? (
+              <option value="">No events available</option>
+            ) : (
+              events.map(event => (
+                <option key={event._id} value={event._id}>
+                  {event.title} ({formatDate(event.startDate)})
+                </option>
+              ))
+            )}
+          </select>
         </div>
         
-        {isLoading ? (
-          <Spinner />
-        ) : events.length === 0 ? (
-          <div className="bg-white dark:bg-dark-200 rounded-lg p-8 text-center">
-            <FaUsers className="text-5xl text-gray-400 mx-auto mb-4" />
-            <p className="text-gray-600 dark:text-gray-400 mb-2">No events found</p>
-            <p className="text-sm text-gray-500 dark:text-gray-500">
-              You don't have any events yet. Create one to start managing participants.
-            </p>
-            <Link 
-              to="/events/create" 
-              className="mt-4 inline-block px-4 py-2 bg-primary text-white rounded hover:bg-primary-dark"
-            >
-              Create Event
-            </Link>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {events.map(event => (
-              <div 
-                key={event._id}
-                className="bg-white dark:bg-dark-200 rounded-lg shadow-sm overflow-hidden hover:shadow-md transition-shadow"
-              >
-                <div className="h-40 bg-gray-200 dark:bg-gray-700 relative">
-                  {event.image ? (
-                    <img 
-                      src={event.image} 
-                      alt={event.title} 
-                      className="w-full h-full object-cover"
-                    />
-                  ) : (
-                    <div className="w-full h-full flex items-center justify-center">
-                      <FaUsers className="text-4xl text-gray-400 dark:text-gray-500" />
+        {selectedEvent && (
+          <div className="mb-4">
+            <h2 className="text-lg font-semibold mb-2">Event Details</h2>
+            {events.length > 0 && selectedEvent && (
+              (() => {
+                const event = events.find(e => e._id === selectedEvent);
+                return event ? (
+                  <div className="flex flex-col md:flex-row md:justify-between gap-4">
+                    <div className="flex flex-col md:flex-row md:items-center gap-2 md:gap-4">
+                      <div className="flex items-center">
+                        <FaCalendarAlt className="text-primary mr-2" />
+                        <span>{formatDate(event.startDate)}</span>
+                      </div>
+                      <div className="flex items-center">
+                        <FaUsers className="text-primary mr-2" />
+                        <span>{filteredParticipants.length} / {event.capacity || 'Unlimited'} participants</span>
+                      </div>
                     </div>
-                  )}
-                </div>
-                
-                <div className="p-4">
-                  <h3 className="text-lg font-semibold text-gray-800 dark:text-white mb-2 line-clamp-1">
-                    {event.title}
-                  </h3>
-                  
-                  <div className="flex items-center text-gray-600 dark:text-gray-400 text-sm mb-4">
-                    <FaUsers className="mr-1" />
-                    <span>{event.registeredUsers?.length || 0} participants</span>
+                    
+                    <Link to={`/events/${event._id}`} className="text-primary hover:underline">
+                      View Event Details
+                    </Link>
                   </div>
-                  
-                  <Link 
-                    to={`/dashboard/participants/${event._id}`}
-                    className="w-full flex items-center justify-center px-4 py-2 bg-primary text-white rounded hover:bg-primary-dark"
-                  >
-                    View Participants
-                  </Link>
-                </div>
-              </div>
-            ))}
+                ) : null;
+              })()
+            )}
           </div>
         )}
-      </div>
-    );
-  }
-  
-  return (
-    <div>
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between mb-6">
-        <div>
-          <button 
-            onClick={() => navigate('/dashboard/participants')}
-            className="inline-flex items-center text-gray-600 dark:text-gray-400 hover:text-primary mb-2"
-          >
-            <FaArrowLeft className="mr-1" /> Back to Events
-          </button>
-          <h1 className="text-2xl font-bold text-gray-800 dark:text-white">
-            {event?.title} - Participants
-          </h1>
-        </div>
         
-        <div className="flex flex-col md:flex-row gap-2 mt-4 md:mt-0">
-          <button 
-            onClick={sendEmailToAll}
-            disabled={!filteredParticipants || filteredParticipants.length === 0}
-            className="btn btn-secondary flex items-center justify-center"
-          >
-            <FaEnvelope className="mr-2" /> Email Participants
-          </button>
-          
-          <button 
-            onClick={exportToCSV}
-            disabled={!filteredParticipants || filteredParticipants.length === 0}
-            className="btn btn-primary flex items-center justify-center"
-          >
-            <FaDownload className="mr-2" /> Export to CSV
-          </button>
+        <div className="relative">
+          <div className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none">
+            <FaSearch className="text-gray-500 dark:text-gray-400" />
+          </div>
+          <input
+            type="text"
+            placeholder="Search participants by name, email, department..."
+            className="w-full pl-10 p-2 border border-gray-300 dark:border-gray-700 rounded-lg bg-white dark:bg-dark-300 text-gray-900 dark:text-white"
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+          />
         </div>
       </div>
       
-      {/* Filters */}
-      <div className="bg-white dark:bg-dark-200 rounded-lg shadow-sm p-4 mb-6">
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <div className="relative">
-            <FaSearch className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
-            <input
-              type="text"
-              placeholder="Search by name or email..."
-              value={searchTerm}
-              onChange={e => setSearchTerm(e.target.value)}
-              className="w-full pl-10 pr-4 py-2 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-dark-100 text-gray-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary"
-            />
+      {isLoading && selectedEvent ? (
+        <Spinner />
+      ) : filteredParticipants.length === 0 ? (
+        <div className="bg-white dark:bg-dark-200 rounded-lg shadow p-6 text-center">
+          <div className="flex justify-center mb-4">
+            <FaUsers className="text-gray-400 text-5xl" />
           </div>
-          
-          <div className="relative">
-            <FaCheck className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
-            <select
-              value={statusFilter}
-              onChange={e => setStatusFilter(e.target.value)}
-              className="w-full pl-10 pr-4 py-2 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-dark-100 text-gray-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary appearance-none"
-            >
-              <option value="all">All Attendance</option>
-              <option value="attended">Attended</option>
-              <option value="not-attended">Not Attended</option>
-            </select>
-          </div>
-          
-          <div className="relative">
-            <FaTicketAlt className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
-            <select
-              value={paymentFilter}
-              onChange={e => setPaymentFilter(e.target.value)}
-              className="w-full pl-10 pr-4 py-2 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-dark-100 text-gray-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary appearance-none"
-            >
-              <option value="all">All Ticket Types</option>
-              <option value="paid">Paid Tickets</option>
-              <option value="free">Free Tickets</option>
-            </select>
-          </div>
-          
-          <div className="relative">
-            <select
-              value={pageSize}
-              onChange={e => setPageSize(Number(e.target.value))}
-              className="w-full px-4 py-2 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-dark-100 text-gray-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary appearance-none"
-            >
-              <option value={10}>10 per page</option>
-              <option value={25}>25 per page</option>
-              <option value={50}>50 per page</option>
-              <option value={100}>100 per page</option>
-            </select>
-          </div>
-        </div>
-      </div>
-      
-      {/* Participants Table */}
-      {!filteredParticipants || filteredParticipants.length === 0 ? (
-        <div className="bg-white dark:bg-dark-200 rounded-lg p-8 text-center">
-          <FaUsers className="text-5xl text-gray-400 mx-auto mb-4" />
-          <p className="text-gray-600 dark:text-gray-400 mb-2">No participants found</p>
-          <p className="text-sm text-gray-500 dark:text-gray-500">
-            {participants && participants.length > 0
-              ? 'Try changing your search criteria'
-              : 'This event has no registered participants yet'}
+          <h2 className="text-xl font-semibold mb-2">No Participants Found</h2>
+          <p className="text-gray-500 dark:text-gray-400 mb-4">
+            {searchTerm
+              ? "No participants match your search criteria."
+              : "There are no registrations for this event yet."}
           </p>
         </div>
       ) : (
-        <div className="bg-white dark:bg-dark-200 rounded-lg shadow-sm overflow-x-auto">
-          <table className="w-full">
-            <thead>
-              <tr className="bg-gray-50 dark:bg-dark-300 text-left">
-                <th className="p-4 font-semibold text-gray-600 dark:text-gray-300 text-sm uppercase">Participant</th>
-                <th className="p-4 font-semibold text-gray-600 dark:text-gray-300 text-sm uppercase">Registered On</th>
-                <th className="p-4 font-semibold text-gray-600 dark:text-gray-300 text-sm uppercase">Ticket Type</th>
-                <th className="p-4 font-semibold text-gray-600 dark:text-gray-300 text-sm uppercase">Payment</th>
-                <th className="p-4 font-semibold text-gray-600 dark:text-gray-300 text-sm uppercase">Attendance</th>
-                <th className="p-4 font-semibold text-gray-600 dark:text-gray-300 text-sm uppercase">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
-              {paginatedParticipants.map(participant => (
-                <tr key={participant._id} className="hover:bg-gray-50 dark:hover:bg-dark-300">
-                  <td className="p-4">
-                    <div className="text-gray-800 dark:text-gray-200 font-medium">
-                      {participant.user.name}
-                    </div>
-                    <div className="text-xs text-gray-500 dark:text-gray-400">
-                      {participant.user.email}
-                    </div>
-                  </td>
-                  <td className="p-4 text-gray-600 dark:text-gray-400 text-sm">
-                    {new Date(participant.registeredAt).toLocaleDateString(undefined, {
-                      year: 'numeric',
-                      month: 'short',
-                      day: 'numeric',
-                    })}
-                  </td>
-                  <td className="p-4">
-                    {participant.paid ? (
-                      <div className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200">
-                        <FaTicketAlt className="mr-1" /> Paid
-                      </div>
-                    ) : (
-                      <div className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200">
-                        <FaTicketAlt className="mr-1" /> Free
-                      </div>
-                    )}
-                  </td>
-                  <td className="p-4">
-                    {participant.paid ? (
-                      <div className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">
-                        <FaCheck className="mr-1" /> Paid
-                      </div>
-                    ) : (
-                      <div className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200">
-                        N/A
-                      </div>
-                    )}
-                  </td>
-                  <td className="p-4">
-                    {participant.attended ? (
-                      <div className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">
-                        <FaCheck className="mr-1" /> Attended
-                      </div>
-                    ) : (
-                      <div className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200">
-                        <FaTimes className="mr-1" /> Not Attended
-                      </div>
-                    )}
-                  </td>
-                  <td className="p-4">
-                    <button
-                      onClick={() => toggleAttendance(participant._id, participant.attended)}
-                      className={`flex items-center text-sm font-medium ${
-                        participant.attended
-                          ? 'text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300'
-                          : 'text-green-600 hover:text-green-800 dark:text-green-400 dark:hover:text-green-300'
-                      }`}
-                    >
-                      {participant.attended ? (
-                        <>
-                          <FaTimes className="mr-1" /> Mark as Not Attended
-                        </>
-                      ) : (
-                        <>
-                          <FaCheck className="mr-1" /> Mark as Attended
-                        </>
+        <div className="bg-white dark:bg-dark-200 rounded-lg shadow overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left">
+              <thead className="bg-gray-100 dark:bg-dark-300 text-xs uppercase">
+                <tr>
+                  <th 
+                    className="px-6 py-3 cursor-pointer hover:bg-gray-200 dark:hover:bg-dark-400"
+                    onClick={() => handleSort('name')}
+                  >
+                    <div className="flex items-center">
+                      <FaUser className="mr-1" />
+                      Name
+                      {sortField === 'name' && (
+                        <span className="ml-1">{sortOrder === 'asc' ? '↑' : '↓'}</span>
                       )}
-                    </button>
-                  </td>
+                    </div>
+                  </th>
+                  <th 
+                    className="px-6 py-3 cursor-pointer hover:bg-gray-200 dark:hover:bg-dark-400"
+                    onClick={() => handleSort('email')}
+                  >
+                    <div className="flex items-center">
+                      <FaEnvelope className="mr-1" />
+                      Email
+                      {sortField === 'email' && (
+                        <span className="ml-1">{sortOrder === 'asc' ? '↑' : '↓'}</span>
+                      )}
+                    </div>
+                  </th>
+                  <th 
+                    className="px-6 py-3 cursor-pointer hover:bg-gray-200 dark:hover:bg-dark-400"
+                    onClick={() => handleSort('department')}
+                  >
+                    <div className="flex items-center">
+                      Department
+                      {sortField === 'department' && (
+                        <span className="ml-1">{sortOrder === 'asc' ? '↑' : '↓'}</span>
+                      )}
+                    </div>
+                  </th>
+                  <th 
+                    className="px-6 py-3 cursor-pointer hover:bg-gray-200 dark:hover:bg-dark-400"
+                    onClick={() => handleSort('year')}
+                  >
+                    <div className="flex items-center">
+                      Year
+                      {sortField === 'year' && (
+                        <span className="ml-1">{sortOrder === 'asc' ? '↑' : '↓'}</span>
+                      )}
+                    </div>
+                  </th>
+                  <th 
+                    className="px-6 py-3 cursor-pointer hover:bg-gray-200 dark:hover:bg-dark-400"
+                    onClick={() => handleSort('registrationDate')}
+                  >
+                    <div className="flex items-center">
+                      <FaCalendarAlt className="mr-1" />
+                      Registration Date
+                      {sortField === 'registrationDate' && (
+                        <span className="ml-1">{sortOrder === 'asc' ? '↑' : '↓'}</span>
+                      )}
+                    </div>
+                  </th>
+                  <th className="px-6 py-3">
+                    <div className="flex items-center">
+                      <FaListAlt className="mr-1" />
+                      Ticket ID
+                    </div>
+                  </th>
+                  <th className="px-6 py-3">Payment Status</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-          
-          {/* Pagination */}
-          {totalPages > 1 && (
-            <div className="p-4 flex items-center justify-between border-t border-gray-200 dark:border-gray-700">
-              <div className="text-sm text-gray-600 dark:text-gray-400">
-                Showing {(currentPage - 1) * pageSize + 1} to {Math.min(currentPage * pageSize, filteredParticipants.length)} of {filteredParticipants.length} participants
-              </div>
-              
-              <div className="flex space-x-2">
-                <button
-                  onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                  disabled={currentPage === 1}
-                  className={`px-3 py-1 rounded-md ${
-                    currentPage === 1
-                      ? 'bg-gray-100 text-gray-400 dark:bg-dark-300 dark:text-gray-500 cursor-not-allowed'
-                      : 'bg-white dark:bg-dark-200 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-dark-300'
-                  }`}
-                >
-                  Previous
-                </button>
-                
-                {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                  let pageNum;
-                  if (totalPages <= 5) {
-                    pageNum = i + 1;
-                  } else if (currentPage <= 3) {
-                    pageNum = i + 1;
-                  } else if (currentPage >= totalPages - 2) {
-                    pageNum = totalPages - 4 + i;
-                  } else {
-                    pageNum = currentPage - 2 + i;
-                  }
-                  
-                  return (
-                    <button
-                      key={pageNum}
-                      onClick={() => setCurrentPage(pageNum)}
-                      className={`w-8 h-8 rounded-md ${
-                        currentPage === pageNum
-                          ? 'bg-primary text-white'
-                          : 'bg-white dark:bg-dark-200 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-dark-300'
-                      }`}
-                    >
-                      {pageNum}
-                    </button>
-                  );
-                })}
-                
-                <button
-                  onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-                  disabled={currentPage === totalPages}
-                  className={`px-3 py-1 rounded-md ${
-                    currentPage === totalPages
-                      ? 'bg-gray-100 text-gray-400 dark:bg-dark-300 dark:text-gray-500 cursor-not-allowed'
-                      : 'bg-white dark:bg-dark-200 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-dark-300'
-                  }`}
-                >
-                  Next
-                </button>
-              </div>
-            </div>
-          )}
+              </thead>
+              <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                {filteredParticipants.map((participant) => (
+                  <tr key={participant._id} className="hover:bg-gray-50 dark:hover:bg-dark-300">
+                    <td className="px-6 py-4 font-medium">
+                      {participant.name}
+                    </td>
+                    <td className="px-6 py-4">
+                      {participant.email}
+                    </td>
+                    <td className="px-6 py-4">
+                      {participant.department || 'N/A'}
+                    </td>
+                    <td className="px-6 py-4">
+                      {participant.year || 'N/A'}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      {formatDate(participant.registrationDate)}
+                    </td>
+                    <td className="px-6 py-4 font-mono text-sm">
+                      {participant.ticketId || 'N/A'}
+                    </td>
+                    <td className="px-6 py-4">
+                      {participant.paid ? (
+                        <span className="px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">
+                          Paid
+                        </span>
+                      ) : (
+                        <span className="px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200">
+                          Free
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+      
+      {filteredParticipants.length > 0 && (
+        <div className="mt-4 text-sm text-gray-600 dark:text-gray-400">
+          Showing {filteredParticipants.length} of {participants.length} participants
         </div>
       )}
     </div>

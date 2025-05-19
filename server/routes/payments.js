@@ -4,9 +4,9 @@ const { v4: uuidv4 } = require('uuid');
 const Event = require('../models/Event');
 const User = require('../models/User');
 const Payment = require('../models/Payment');
-const { protect } = require('../middleware/auth');
+const { protect, authorize } = require('../middleware/auth');
 const { check, validationResult } = require('express-validator');
-const { sendTicket } = require('../services/ticketService');
+const { sendEventTicket } = require('../utils/ticketService');
 
 // Mock PhonePe API
 const generateTransactionId = () => {
@@ -67,85 +67,202 @@ router.post('/initiate', protect, async (req, res) => {
   }
 });
 
-// @route   POST /api/payments/process/:paymentId
-// @desc    Process payment (simulated)
+// @route   POST /api/payments/process
+// @desc    Process a payment for an event
 // @access  Private
-router.post('/process/:paymentId', protect, async (req, res) => {
-  const { paymentId } = req.params;
-  const { eventId, status } = req.body;
-
+router.post('/process', protect, async (req, res) => {
   try {
-    // In a real app, we would call PhonePe API here
-    // This is a mock implementation
+    const { eventId, paymentDetails } = req.body;
     
+    // Find the event
     const event = await Event.findById(eventId);
+    
+    if (!event) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Event not found' 
+      });
+    }
+    
+    // Check if the event is paid
+    if (!event.isPaid) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'This event is free and does not require payment' 
+      });
+    }
+    
+    // Check if user is already registered
     const user = await User.findById(req.user.id);
-    
-    if (!event || !user) {
-      return res.status(404).json({ message: 'Event or user not found' });
-    }
-    
-    // If payment status is success
-    if (status === 'success') {
-      // Create a new payment record
-      const payment = new Payment({
-        user: req.user.id,
-        event: eventId,
-        amount: event.price,
-        transactionId: generateTransactionId(),
-        status: 'completed'
-      });
-      
-      await payment.save();
-      
-      // Register the user for the event
-      event.registeredUsers.push(req.user.id);
-      await event.save();
-      
-      // Add event to user's registered events
-      user.registeredEvents.push(event._id);
-      await user.save();
-      
-      return res.json({
-        success: true,
-        message: 'Payment successful',
-        data: {
-          payment: payment
-        }
-      });
-    } else {
-      // Create a failed payment record
-      const payment = new Payment({
-        user: req.user.id,
-        event: eventId,
-        amount: event.price,
-        transactionId: generateTransactionId(),
-        status: 'failed'
-      });
-      
-      await payment.save();
-      
-      return res.status(400).json({
-        success: false,
-        message: 'Payment failed',
-        data: {
-          payment: payment
-        }
+    if (user.registeredEvents.includes(eventId)) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'You are already registered for this event' 
       });
     }
+    
+    // Check if event has capacity
+    if (event.capacity && event.registeredUsers.length >= event.capacity) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Event has reached maximum capacity' 
+      });
+    }
+    
+    // Generate unique payment ID and ticket ID
+    const paymentId = `PAY-${uuidv4().substring(0, 8).toUpperCase()}`;
+    const ticketId = `TIX-${uuidv4().substring(0, 8).toUpperCase()}`;
+    
+    // Create a new payment record
+    const payment = new Payment({
+      user: req.user.id,
+      event: eventId,
+      amount: event.price,
+      paymentId,
+      ticketId,
+      status: 'success', // In a real app, this would be determined by payment gateway
+      paymentMethod: paymentDetails?.method || 'online',
+      paymentDetails: paymentDetails || {}
+    });
+    
+    await payment.save();
+    
+    // Register user for the event
+    await Event.findByIdAndUpdate(
+      eventId,
+      { $addToSet: { registeredUsers: req.user.id } },
+      { new: true }
+    );
+    
+    await User.findByIdAndUpdate(
+      req.user.id,
+      { $addToSet: { registeredEvents: eventId } },
+      { new: true }
+    );
+    
+    // Send ticket via email
+    try {
+      await sendEventTicket(user.email, event, user, ticketId);
+    } catch (emailError) {
+      console.error('Failed to send ticket email:', emailError);
+      // Don't fail the registration process if email fails
+    }
+    
+    res.json({
+      success: true,
+      data: {
+        paymentId,
+        ticketId,
+        amount: event.price,
+        status: 'success',
+        message: 'Payment processed successfully'
+      }
+    });
   } catch (err) {
-    console.error(err.message);
-    res.status(500).json({ message: 'Server Error' });
+    console.error('Payment processing error:', err.message);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Server Error' 
+    });
+  }
+});
+
+// @route   POST /api/payments/simulate
+// @desc    Simulate a payment result (success/failure)
+// @access  Private
+router.post('/simulate', protect, async (req, res) => {
+  try {
+    const { eventId, status } = req.body;
+    
+    if (!['success', 'failed'].includes(status)) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Invalid status. Must be success or failed' 
+      });
+    }
+    
+    // Find the event
+    const event = await Event.findById(eventId);
+    
+    if (!event) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Event not found' 
+      });
+    }
+    
+    // Generate IDs
+    const paymentId = `SIM-${uuidv4().substring(0, 8).toUpperCase()}`;
+    const ticketId = status === 'success' ? `TIX-${uuidv4().substring(0, 8).toUpperCase()}` : null;
+    
+    // Create a payment record
+    const payment = new Payment({
+      user: req.user.id,
+      event: eventId,
+      amount: event.price || 0,
+      paymentId,
+      ticketId: ticketId || paymentId,
+      status,
+      paymentMethod: 'simulation',
+      paymentDetails: { simulatedAt: new Date() }
+    });
+    
+    await payment.save();
+    
+    // If payment is successful, register user for the event
+    if (status === 'success') {
+      await Event.findByIdAndUpdate(
+        eventId,
+        { $addToSet: { registeredUsers: req.user.id } },
+        { new: true }
+      );
+      
+      await User.findByIdAndUpdate(
+        req.user.id,
+        { $addToSet: { registeredEvents: eventId } },
+        { new: true }
+      );
+      
+      // Send ticket via email
+      try {
+        const user = await User.findById(req.user.id);
+        await sendEventTicket(user.email, event, user, ticketId);
+      } catch (emailError) {
+        console.error('Failed to send ticket email:', emailError);
+      }
+    }
+    
+    res.json({
+      success: true,
+      data: {
+        paymentId,
+        ticketId,
+        amount: event.price || 0,
+        status,
+        message: status === 'success' 
+          ? 'Payment successful and registration complete'
+          : 'Payment failed, please try again'
+      }
+    });
+  } catch (err) {
+    console.error('Payment simulation error:', err.message);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Server Error' 
+    });
   }
 });
 
 // @route   GET /api/payments/history
-// @desc    Get payment history for a user
+// @desc    Get payment history for the logged in user
 // @access  Private
 router.get('/history', protect, async (req, res) => {
   try {
     const payments = await Payment.find({ user: req.user.id })
-      .populate('event', 'title startDate')
+      .populate({
+        path: 'event',
+        select: 'title startDate endDate location'
+      })
       .sort({ createdAt: -1 });
     
     res.json({
@@ -155,7 +272,10 @@ router.get('/history', protect, async (req, res) => {
     });
   } catch (err) {
     console.error(err.message);
-    res.status(500).json({ message: 'Server Error' });
+    res.status(500).json({ 
+      success: false, 
+      message: 'Server Error' 
+    });
   }
 });
 
@@ -287,6 +407,49 @@ router.get('/transactions/:id', protect, async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Server error'
+    });
+  }
+});
+
+// @route   POST /api/payments/test-email
+// @desc    Test email functionality
+// @access  Private/Admin
+router.post('/test-email', protect, authorize('admin'), async (req, res) => {
+  try {
+    const { email } = req.body;
+    const testEmail = email || req.user.email;
+    
+    // Get a sample event and user
+    const event = await Event.findOne().populate('organizer');
+    const user = await User.findById(req.user.id);
+    
+    if (!event) {
+      return res.status(404).json({
+        success: false,
+        message: 'No events found to test with'
+      });
+    }
+    
+    // Generate a test ticket ID
+    const ticketId = `TEST-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+    
+    // Send test email
+    await sendEventTicket(testEmail, event, user, ticketId);
+    
+    res.json({
+      success: true,
+      message: `Test email sent to ${testEmail}`,
+      details: {
+        event: event.title,
+        ticketId
+      }
+    });
+  } catch (err) {
+    console.error('Test email error:', err);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to send test email',
+      error: err.message
     });
   }
 });

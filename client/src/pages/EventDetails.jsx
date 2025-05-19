@@ -2,9 +2,12 @@ import { useEffect, useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useSelector, useDispatch } from 'react-redux';
 import { toast } from 'react-toastify';
-import { FaCalendarAlt, FaMapMarkerAlt, FaUsers, FaMoneyBillWave, FaClock, FaEdit, FaTrash, FaCheck, FaTimesCircle } from 'react-icons/fa';
+import { FaCalendarAlt, FaMapMarkerAlt, FaUsers, FaMoneyBillWave, FaClock, FaEdit, FaTrash, FaCheck, FaTimesCircle, FaDownload } from 'react-icons/fa';
 import { getEvent, registerForEvent, clearEvent, deleteEvent, unregisterFromEvent } from '../features/events/eventSlice';
 import Spinner from '../components/ui/Spinner';
+import axios from 'axios';
+
+const API_URL = `${import.meta.env.VITE_API_URL || 'http://localhost:5000/api'}`;
 
 const EventDetails = () => {
   const { id } = useParams();
@@ -125,6 +128,45 @@ const EventDetails = () => {
     } else {
       setConfirmDelete(true);
       setTimeout(() => setConfirmDelete(false), 3000);
+    }
+  };
+  
+  const downloadTicket = async () => {
+    try {
+      if (!user) {
+        toast.error('Please log in to download your ticket');
+        return;
+      }
+      
+      const token = localStorage.getItem('token');
+      
+      const config = {
+        headers: {
+          Authorization: `Bearer ${token}`
+        },
+        responseType: 'blob' // Important for downloading files
+      };
+      
+      toast.info('Downloading ticket...');
+      
+      const response = await axios.get(
+        `${API_URL}/events/${id}/ticket`, 
+        config
+      );
+      
+      // Create a blob link to download
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `event-ticket-${id}.pdf`);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      
+      toast.success('Ticket downloaded successfully');
+    } catch (error) {
+      console.error('Error downloading ticket:', error);
+      toast.error('Failed to download ticket. Please try again later.');
     }
   };
   
@@ -254,12 +296,20 @@ const EventDetails = () => {
                     <FaCheck className="mr-2" />
                     <span>You are registered for this event</span>
                   </div>
-                  <button 
-                    onClick={handleUnregister}
-                    className="btn btn-danger w-full flex items-center justify-center text-sm md:text-base"
-                  >
-                    <FaTimesCircle className="mr-2" /> Cancel Registration
-                  </button>
+                  <div className="flex flex-col xs:flex-row gap-2 mt-4">
+                    <button 
+                      onClick={downloadTicket}
+                      className="btn btn-secondary flex items-center justify-center"
+                    >
+                      <FaDownload className="mr-2" /> Download Ticket
+                    </button>
+                    <button 
+                      onClick={handleUnregister}
+                      className="btn btn-danger flex items-center justify-center"
+                    >
+                      <FaTimesCircle className="mr-2" /> Cancel Registration
+                    </button>
+                  </div>
                 </div>
               ) : event.registeredUsers?.length >= event.capacity ? (
                 <div className="bg-red-100 dark:bg-red-900 p-2 md:p-3 rounded-md text-sm md:text-base text-red-800 dark:text-red-200">
